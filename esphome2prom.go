@@ -7,6 +7,7 @@ import (
 	"github.com/XANi/esphome2prom/queue"
 	"github.com/XANi/esphome2prom/web"
 	"github.com/XANi/go-yamlcfg"
+	"github.com/XANi/goneric"
 	"github.com/efigence/go-mon"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
@@ -105,6 +106,13 @@ func main() {
 			Value: "",
 			Usage: "address to run pprof on, disabled by default",
 		},
+		&cli.StringMapFlag{
+			Name: "extra-labels",
+			Value: map[string]string{
+				"host": goneric.Must(os.Hostname()),
+			},
+			Usage: "comma separated key=value pairs of additional prometheus labels",
+		},
 	}
 	app.Action = func(ctx context.Context, c *cli.Command) error {
 		if c.Bool("help") {
@@ -145,8 +153,9 @@ func main() {
 			}()
 		}
 		_, err = queue.New(&queue.Config{
-			MQTTAddr: c.String("mqtt-addr"),
-			Logger:   log.Named("mq"),
+			MQTTAddr:    c.String("mqtt-addr"),
+			Logger:      log.Named("mq"),
+			ExtraLabels: c.StringMap("extra-labels"),
 		})
 		if err != nil {
 			log.Panicf("error starting queue listener: %s", err)

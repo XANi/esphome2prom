@@ -2,8 +2,8 @@ package queue
 
 type ESPHomeDiscovery struct {
 	// https://www.home-assistant.io/integrations/sensor/#device-class
-	DeviceClass string `json:"dev_cla"`
-	Unit        string `json:"unit_of_meas"`
+	DeviceClass DeviceClass `json:"dev_cla"`
+	Unit        string      `json:"unit_of_meas"`
 	// https://developers.home-assistant.io/docs/core/entity/sensor/#available-state-classes
 	StateClass        string      `json:"stat_cla"`
 	Name              string      `json:"name"`
