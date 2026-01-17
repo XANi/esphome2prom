@@ -21,6 +21,7 @@ import (
 var version string
 var log *zap.SugaredLogger
 var debug = true
+var exit = make(chan error, 1)
 
 // /* embeds with all files, just dir/ ignores files starting with _ or .
 //
@@ -77,8 +78,8 @@ func main() {
 		Commands:    nil,
 		HideHelp:    true,
 	}
-	app.Name = "foobar"
-	app.Description = "do foo to bar"
+	app.Name = "esphome2prom"
+	app.Description = "Convert esphome metric to prometheus write protocol"
 	app.Version = version
 	app.HideHelp = true
 	log.Infof("Starting %s version: %s", app.Name, version)
@@ -87,24 +88,35 @@ func main() {
 		&cli.BoolFlag{Name: "debug, d", Usage: "enable debug logs"},
 		&cli.StringFlag{
 			Name:  "listen-addr",
-			Value: "127.0.0.1:3001",
 			Usage: "Listen addr",
 			Sources: cli.NewValueSourceChain(
 				cli.EnvVar("LISTEN_ADDR"),
 			),
 		},
 		&cli.StringFlag{
-			Name:  "mqtt-addr",
-			Value: "127.0.0.1:1883",
-			Usage: "mqtt broker address",
+			Name:     "mqtt-addr",
+			Usage:    "mqtt broker address",
+			Required: true,
 			Sources: cli.NewValueSourceChain(
 				cli.EnvVar("MQTT_ADDR"),
+			),
+		},
+		&cli.StringFlag{
+			Name:  "prometheus-write-url",
+			Usage: "prometheus write protocol url",
+			Sources: cli.NewValueSourceChain(
+				cli.EnvVar("PROMETHEUS_WRITE_URL"),
 			),
 		},
 		&cli.StringFlag{
 			Name:  "pprof-addr",
 			Value: "",
 			Usage: "address to run pprof on, disabled by default",
+		},
+		&cli.StringFlag{
+			Name:  "prefix",
+			Value: "",
+			Usage: "prefix for metrics name",
 		},
 		&cli.StringMapFlag{
 			Name: "extra-labels",
@@ -121,6 +133,9 @@ func main() {
 		}
 		debug = c.Bool("debug")
 		log.Debug("debug enabled")
+		if c.String("prometheus-write-url") == "" && c.String("listen-addr") == "" {
+			log.Panic("must specify --prometheus-write-url or --listen-addr")
+		}
 
 		cfgFiles := []string{
 			"$HOME/.config/my/cnf.yaml",
@@ -139,12 +154,15 @@ func main() {
 		}
 
 		os.DirFS(".")
-		w, err := web.New(web.Config{
-			Logger:     log,
-			ListenAddr: c.String("listen-addr"),
-		}, webDir)
-		if err != nil {
-			log.Panicf("error starting web listener: %s", err)
+		if c.String("listen-addr") != "" {
+			w, err := web.New(web.Config{
+				Logger:     log,
+				ListenAddr: c.String("listen-addr"),
+			}, webDir)
+			_ = w
+			if err != nil {
+				log.Panicf("error starting web listener: %s", err)
+			}
 		}
 		if len(c.String("pprof-addr")) > 0 {
 			log.Infof("listening pprof on %s", c.String("pprof-addr"))
@@ -156,24 +174,13 @@ func main() {
 			MQTTAddr:    c.String("mqtt-addr"),
 			Logger:      log.Named("mq"),
 			ExtraLabels: c.StringMap("extra-labels"),
+			Prefix:      c.String("prefix"),
+			Debug:       debug,
 		})
 		if err != nil {
 			log.Panicf("error starting queue listener: %s", err)
 		}
-
-		return w.Run()
-	}
-	// optional commands
-	app.Commands = []*cli.Command{
-		{
-			Name:    "add",
-			Aliases: []string{"a"},
-			Usage:   "example cmd",
-			Action: func(ctx context.Context, c *cli.Command) error {
-				log.Warnf("running example cmd")
-				return nil
-			},
-		},
+		return <-exit
 	}
 	// to sort do that
 	// sort.Sort(cli.FlagsByName(app.Flags))

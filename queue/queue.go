@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/XANi/promwriter"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/k0kubun/pp/v3"
 	"go.uber.org/zap"
 	"net/url"
 	"os"
@@ -23,6 +24,8 @@ type Config struct {
 	MQTTAddr    string
 	Logger      *zap.SugaredLogger
 	ExtraLabels map[string]string
+	Prefix      string
+	Debug       bool
 }
 
 func New(cfg *Config) (*Queue, error) {
@@ -64,7 +67,7 @@ func New(cfg *Config) (*Queue, error) {
 	go func() {
 		for ev := range sendQueue {
 			metric := promwriter.Metric{
-				Name:   ev.Name,
+				Name:   cfg.Prefix + ev.Name,
 				Labels: ev.Labels,
 				TS:     ev.TS.UTC(),
 				Value:  ev.Value,
@@ -80,12 +83,18 @@ func New(cfg *Config) (*Queue, error) {
 	}()
 	client.Subscribe("homeassistant/#", 0, func(c mqtt.Client, m mqtt.Message) {
 		d := ESPHomeDiscovery{}
+		// wildcard must be last character in the topic so we can't just do `homeassistant/#/config` here
+		if !strings.HasSuffix(m.Topic(), "/config") {
+			return
+		}
 		err := json.Unmarshal(m.Payload(), &d)
 		if err != nil {
 			cfg.Logger.Warnf("could not decode discovery %s: %s\n", m.Topic(), string(m.Payload()))
 			return
 		}
-		cfg.Logger.Debugf("received %s: %+v\n", m.Topic(), &d)
+		if cfg.Debug {
+			cfg.Logger.Debugf("received %s: %+v\n", m.Topic(), pp.Sprint(&d))
+		}
 		if d.StateTopic != "" {
 			switch d.DeviceClass {
 			case DeviceClassTemperature:
@@ -94,26 +103,31 @@ func New(cfg *Config) (*Queue, error) {
 				q.Lock()
 				q.sensorMap[d.StateTopic] = sensor
 				q.Unlock()
+			case "": // ignore unrelated messages
 			default:
 				cfg.Logger.Infof("[%s] unknown device class [%s]", m.Topic(), d.DeviceClass)
 			}
 		}
 	})
-	client.Subscribe("+/sensor/#", 0, func(c mqtt.Client, m mqtt.Message) {
+	// this path need to be pretty exact to not catch the discovery path from above
+	client.Subscribe("+/sensor/+/state", 0, func(c mqtt.Client, m mqtt.Message) {
 		if strings.HasPrefix(m.Topic(), "homeassistant/") {
 			return
 		}
 		q.RLock() // optimize that lock out
 		if f, ok := q.sensorMap[m.Topic()]; ok {
-			//cfg.Logger.Debugf("%s: %s", m.Topic(), string(m.Payload()))
+			if cfg.Debug {
+				cfg.Logger.Debugf("sensor %s: %s", m.Topic(), string(m.Payload()))
+			}
 			err := f.ProcessMessage(m)
 			if err != nil {
 				cfg.Logger.Warnf("could not process message %s: %s\n", m.Topic(), string(m.Payload()))
 			}
-		} else {
-			cfg.Logger.Warnf("err: %s: %s", m.Topic(), string(m.Payload()))
+		} else if cfg.Debug {
+			cfg.Logger.Warnf("unhandled sensor: %s: %s", m.Topic(), string(m.Payload()))
 		}
 		q.RUnlock()
 	})
+
 	return q, nil
 }

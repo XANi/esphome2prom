@@ -45,6 +45,7 @@ _testmain.go
 *.out
 *.static
 esphome2prom
+esphome2prom.static
 *.arm
 *.arm64
 *.386

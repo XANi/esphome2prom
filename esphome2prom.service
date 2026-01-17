@@ -1,0 +1,18 @@
+[Unit]
+Description=Esphome2prom writer
+ConditionPathExists=/opt/esphome2prom
+
+
+[Service]
+Type=simple
+User=esphome2prom
+Group=esphome2prom
+Environment=MQTT_ADDR=tcp://mqtt:mqtt@example.com:1883
+# this is Victoriametrics (prom-combatible) write path.
+Environment=PROMETHEUS_WRITE_URL=http://example.com:8480/insert/1:0/prometheus/api/v1/write
+ExecStart=/opt/esphome2prom/esphome2prom --listen-addr :8765
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
