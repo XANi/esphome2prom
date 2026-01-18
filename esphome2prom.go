@@ -86,6 +86,9 @@ func main() {
 	app.Flags = []cli.Flag{
 		&cli.BoolFlag{Name: "help, h", Usage: "show help"},
 		&cli.BoolFlag{Name: "debug, d", Usage: "enable debug logs"},
+		&cli.StringFlag{Name: "config, c",
+			Usage: "config file. Will be created if it does not exist",
+		},
 		&cli.StringFlag{
 			Name:  "listen-addr",
 			Usage: "Listen addr",
@@ -131,19 +134,31 @@ func main() {
 			cli.ShowAppHelp(c)
 			os.Exit(1)
 		}
-		debug = c.Bool("debug")
-		log.Debug("debug enabled")
 		if c.String("prometheus-write-url") == "" && c.String("listen-addr") == "" {
 			log.Panic("must specify --prometheus-write-url or --listen-addr")
 		}
 
 		cfgFiles := []string{
-			"$HOME/.config/my/cnf.yaml",
-			"./cfg/config.yaml",
-			"/etc/my/cnf.yaml",
+			c.String("config"),
 		}
-		var cfg config.Config
-		err := yamlcfg.LoadConfig(cfgFiles, &cfg)
+		cfg := config.Config{
+			MQTTAddress:        c.String("mqtt-addr"),
+			PrometheusWriteURL: c.String("prometheus-write-url"),
+			ListenAddress:      c.String("listen-addr"),
+			Debug:              c.Bool("debug"),
+			PProfAddress:       c.String("pprof-addr"),
+			ExtraLabels:        c.StringMap("extra-labels"),
+			PrometheusPrefix:   c.String("prometheus-prefix"),
+		}
+		if c.String("config") != "" {
+			err := yamlcfg.LoadConfig(cfgFiles, &cfg)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		debug = cfg.Debug
+		log.Debug("debug enabled")
+
 		var webDir fs.FS
 		webDir = embeddedWebContent
 		if st, err := os.Stat("./static"); err == nil && st.IsDir() {
@@ -154,27 +169,27 @@ func main() {
 		}
 
 		os.DirFS(".")
-		if c.String("listen-addr") != "" {
+		if len(cfg.ListenAddress) > 0 {
 			w, err := web.New(web.Config{
 				Logger:     log,
-				ListenAddr: c.String("listen-addr"),
+				ListenAddr: cfg.ListenAddress,
 			}, webDir)
 			_ = w
 			if err != nil {
 				log.Panicf("error starting web listener: %s", err)
 			}
 		}
-		if len(c.String("pprof-addr")) > 0 {
-			log.Infof("listening pprof on %s", c.String("pprof-addr"))
+		if len(cfg.PProfAddress) > 0 {
+			log.Infof("listening pprof on %s", cfg.PProfAddress)
 			go func() {
-				log.Errorf("failed to start debug listener: %s (ignoring)", http.ListenAndServe(c.String("pprof-addr"), nil))
+				log.Errorf("failed to start debug listener: %s (ignoring)", http.ListenAndServe(cfg.PProfAddress, nil))
 			}()
 		}
-		_, err = queue.New(&queue.Config{
-			MQTTAddr:    c.String("mqtt-addr"),
+		_, err := queue.New(&queue.Config{
+			MQTTAddr:    cfg.MQTTAddress,
 			Logger:      log.Named("mq"),
-			ExtraLabels: c.StringMap("extra-labels"),
-			Prefix:      c.String("prefix"),
+			ExtraLabels: cfg.ExtraLabels,
+			Prefix:      cfg.PrometheusPrefix,
 			Debug:       debug,
 		})
 		if err != nil {

@@ -7,6 +7,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/k0kubun/pp/v3"
 	"go.uber.org/zap"
+	"log"
 	"net/url"
 	"os"
 	"strings"
@@ -16,7 +17,10 @@ import (
 
 type Queue struct {
 	client    mqtt.Client
+	cfg       *Config
+	l         *zap.SugaredLogger
 	sensorMap map[string]Sensor
+	sendQueue chan Metric
 	sync.RWMutex
 }
 
@@ -33,24 +37,57 @@ func New(cfg *Config) (*Queue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot parse MQTT URL: %w", err)
 	}
+	q := &Queue{
+		sensorMap: map[string]Sensor{},
+		cfg:       cfg,
+		sendQueue: make(chan Metric, 128),
+		l:         cfg.Logger,
+	}
 	p, _ := mqttURL.User.Password()
+
 	opts := mqtt.NewClientOptions().
 		AddBroker(cfg.MQTTAddr).
 		SetUsername(mqttURL.User.Username()).
 		SetPassword(p).
-		SetClientID("esphome2prom").
-		SetKeepAlive(2 * time.Second).
-		SetPingTimeout(1 * time.Second)
-
+		SetClientID("esphome2prom" + randomString(32)). // this need to be unique, else we get disconnect
+		SetKeepAlive(20 * time.Second).
+		SetPingTimeout(10 * time.Second).
+		SetConnectRetry(true).
+		SetConnectRetryInterval(30 * time.Second).
+		SetAutoReconnect(true).
+		SetReconnectingHandler(func(client mqtt.Client, options *mqtt.ClientOptions) {
+			cfg.Logger.Warnf("reconnecting to MQ")
+		}).SetConnectionLostHandler(func(client mqtt.Client, err error) {
+		cfg.Logger.Warnf("connection to MQTT lost: %v", err)
+	}).SetOnConnectHandler(func(client mqtt.Client) {
+		cfg.Logger.Infof("connected to MQTT")
+		q.addSubscriptions()
+	})
 	client := mqtt.NewClient(opts)
-	q := &Queue{
-		client:    client,
-		sensorMap: map[string]Sensor{},
-	}
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		panic(token.Error())
-	}
+	q.client = client
 
+	if token := client.Connect(); token.Wait() {
+		if token.Error() != nil {
+			cfg.Logger.Panicf("err connecting: %s", token.Error())
+		} else {
+			cfg.Logger.Infof("connected to mqtt %s:%s", mqttURL.Hostname(), mqttURL.Port())
+		}
+	}
+	go func() {
+		failCount := 0
+		for {
+			time.Sleep(30 * time.Second)
+			if !client.IsConnected() {
+				failCount++
+				failCount++
+			} else if failCount > 0 {
+				failCount--
+			}
+			if failCount > 10 {
+				log.Panic("not connected for a while, exiting")
+			}
+		}
+	}()
 	//token := client.Publish("esphome/discover", 0, false, "hello mqtt")
 	//token.Wait()
 	promcfg := promwriter.Config{
@@ -63,9 +100,8 @@ func New(cfg *Config) (*Queue, error) {
 	if err != nil {
 		cfg.Logger.Panicw("promwriter", "err", err)
 	}
-	sendQueue := make(chan Metric, 128)
 	go func() {
-		for ev := range sendQueue {
+		for ev := range q.sendQueue {
 			metric := promwriter.Metric{
 				Name:   cfg.Prefix + ev.Name,
 				Labels: ev.Labels,
@@ -81,7 +117,13 @@ func New(cfg *Config) (*Queue, error) {
 			}
 		}
 	}()
-	client.Subscribe("homeassistant/#", 0, func(c mqtt.Client, m mqtt.Message) {
+
+	return q, nil
+}
+
+func (q *Queue) addSubscriptions() {
+	q.l.Debugf("adding subscriptions")
+	q.client.Subscribe("homeassistant/#", 0, func(c mqtt.Client, m mqtt.Message) {
 		d := ESPHomeDiscovery{}
 		// wildcard must be last character in the topic so we can't just do `homeassistant/#/config` here
 		if !strings.HasSuffix(m.Topic(), "/config") {
@@ -89,45 +131,43 @@ func New(cfg *Config) (*Queue, error) {
 		}
 		err := json.Unmarshal(m.Payload(), &d)
 		if err != nil {
-			cfg.Logger.Warnf("could not decode discovery %s: %s\n", m.Topic(), string(m.Payload()))
+			q.cfg.Logger.Warnf("could not decode discovery %s: %s\n", m.Topic(), string(m.Payload()))
 			return
 		}
-		if cfg.Debug {
-			cfg.Logger.Debugf("received %s: %+v\n", m.Topic(), pp.Sprint(&d))
+		if q.cfg.Debug {
+			q.cfg.Logger.Debugf("received %s: %+v\n", m.Topic(), pp.Sprint(&d))
 		}
 		if d.StateTopic != "" {
 			switch d.DeviceClass {
 			case DeviceClassTemperature:
-				cfg.Logger.Infof("adding temperature sensor under %s", d.StateTopic)
-				sensor := NewTemperatureSensor(cfg.Logger.Named(m.Topic()), d, sendQueue)
+				q.l.Infof("adding temperature sensor under %s", d.StateTopic)
+				sensor := NewTemperatureSensor(q.l.Named(m.Topic()), d, q.sendQueue)
 				q.Lock()
 				q.sensorMap[d.StateTopic] = sensor
 				q.Unlock()
 			case "": // ignore unrelated messages
 			default:
-				cfg.Logger.Infof("[%s] unknown device class [%s]", m.Topic(), d.DeviceClass)
+				q.l.Infof("[%s] unknown device class [%s]", m.Topic(), d.DeviceClass)
 			}
 		}
 	})
 	// this path need to be pretty exact to not catch the discovery path from above
-	client.Subscribe("+/sensor/+/state", 0, func(c mqtt.Client, m mqtt.Message) {
+	q.client.Subscribe("+/sensor/+/state", 0, func(c mqtt.Client, m mqtt.Message) {
 		if strings.HasPrefix(m.Topic(), "homeassistant/") {
 			return
 		}
 		q.RLock() // optimize that lock out
 		if f, ok := q.sensorMap[m.Topic()]; ok {
-			if cfg.Debug {
-				cfg.Logger.Debugf("sensor %s: %s", m.Topic(), string(m.Payload()))
+			if q.cfg.Debug {
+				q.l.Debugf("sensor %s: %s", m.Topic(), string(m.Payload()))
 			}
 			err := f.ProcessMessage(m)
 			if err != nil {
-				cfg.Logger.Warnf("could not process message %s: %s\n", m.Topic(), string(m.Payload()))
+				q.l.Warnf("could not process message %s: %s\n", m.Topic(), string(m.Payload()))
 			}
-		} else if cfg.Debug {
-			cfg.Logger.Warnf("unhandled sensor: %s: %s", m.Topic(), string(m.Payload()))
+		} else if q.cfg.Debug {
+			q.l.Warnf("unhandled sensor: %s: %s", m.Topic(), string(m.Payload()))
 		}
 		q.RUnlock()
 	})
-
-	return q, nil
 }

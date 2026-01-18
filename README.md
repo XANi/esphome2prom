@@ -50,13 +50,13 @@ Flags
     - PROMETHEUS_WRITE_URL — URL of the Prometheus remote-write endpoint. If not set, writing metrics will be disabled or fail depending on config.
 
 Example:
-
+```
 ./esphome2prom \
---mqtt-addr tcp://user:pass@mqtt.example.local:1883 \
---listen-addr 0.0.0.0:3001 \
---extra-labels location=home,site=livingroom \
---debug
-
+    --mqtt-addr tcp://user:pass@mqtt.example.local:1883 \
+    --prometheus-write-url https://prometheus-remote-write.example/api/v1/write \
+    --extra-labels location=home,site=livingroom \
+    --debug
+```
 or with environment variables:
 
 export MQTT_ADDR="tcp://user:pass@mqtt.example.local:1883"
