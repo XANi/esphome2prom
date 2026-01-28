@@ -101,6 +101,7 @@ func New(cfg *Config) (*Queue, error) {
 		cfg.Logger.Panicw("promwriter", "err", err)
 	}
 	go func() {
+
 		for ev := range q.sendQueue {
 			metric := promwriter.Metric{
 				Name:   cfg.Prefix + ev.Name,
@@ -138,16 +139,30 @@ func (q *Queue) addSubscriptions() {
 			q.cfg.Logger.Debugf("received %s: %+v\n", m.Topic(), pp.Sprint(&d))
 		}
 		if d.StateTopic != "" {
+			sensorNotFound := false
+			q.Lock()
 			switch d.DeviceClass {
 			case DeviceClassTemperature:
-				q.l.Infof("adding temperature sensor under %s", d.StateTopic)
-				sensor := NewTemperatureSensor(q.l.Named(m.Topic()), d, q.sendQueue)
-				q.Lock()
-				q.sensorMap[d.StateTopic] = sensor
-				q.Unlock()
+				q.sensorMap[d.StateTopic] = NewTemperatureSensor(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassPressure:
+				q.sensorMap[d.StateTopic] = NewPressureSensor(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassHumidity:
+				q.sensorMap[d.StateTopic] = NewHumiditySensor(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassSignalStrength:
+				q.sensorMap[d.StateTopic] = NewSignalStrengthSensor(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassVoltage:
+				q.sensorMap[d.StateTopic] = NewVoltageSensor(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassCurrent:
+				q.sensorMap[d.StateTopic] = NewCurrentSensor(q.l.Named(m.Topic()), d, q.sendQueue)
 			case "": // ignore unrelated messages
+				sensorNotFound = true
 			default:
+				sensorNotFound = true
 				q.l.Infof("[%s] unknown device class [%s]", m.Topic(), d.DeviceClass)
+			}
+			q.Unlock()
+			if !sensorNotFound {
+				q.l.Infof("adding %s sensor under %s", d.DeviceClass, d.StateTopic)
 			}
 		}
 	})
