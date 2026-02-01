@@ -82,6 +82,7 @@ Note: Most runtime options are controlled via CLI flags and environment variable
 
 ## Metrics
 
+- nodes called `ignoreme` will be ignored. This is so new esphome node can be tested before metrics are being sent 
 - Metrics are emitted as simple Prometheus metrics (name, labels, value, timestamp) via the configured remote-write URL.
 - Temperature sensors are converted to Celsius if unit indicates Kelvin or Fahrenheit. Metric names and label keys follow simple conventions (device, sensor name, plus any `extra-labels` provided).
 

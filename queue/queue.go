@@ -138,6 +138,11 @@ func (q *Queue) addSubscriptions() {
 		if q.cfg.Debug {
 			q.cfg.Logger.Debugf("received %s: %+v\n", m.Topic(), pp.Sprint(&d))
 		}
+		if d.Name == "ignoreme" {
+			q.l.Infof("ignoring %s", m.Topic())
+			return
+		}
+
 		if d.StateTopic != "" {
 			sensorNotFound := false
 			q.Lock()
@@ -169,6 +174,9 @@ func (q *Queue) addSubscriptions() {
 	// this path need to be pretty exact to not catch the discovery path from above
 	q.client.Subscribe("+/sensor/+/state", 0, func(c mqtt.Client, m mqtt.Message) {
 		if strings.HasPrefix(m.Topic(), "homeassistant/") {
+			return
+		}
+		if strings.Contains(m.Topic(), "/ignoreme/") {
 			return
 		}
 		q.RLock() // optimize that lock out
