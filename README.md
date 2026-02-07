@@ -8,7 +8,10 @@ esphome2prom listens to ESPHome MQTT discovery and sensor topics, converts ESPHo
 
 See `queue/sensor.go` and `queue/queue.go` for adding more
 
--  temperature
+- temperature
+- humidity
+- CO2
+- PM1/2.5/4/10 (if you also want `count` of every particle set `device_class: aqi` in esphome sensor
 
 
 ## How it works 

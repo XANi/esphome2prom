@@ -138,11 +138,11 @@ func (q *Queue) addSubscriptions() {
 		if q.cfg.Debug {
 			q.cfg.Logger.Debugf("received %s: %+v\n", m.Topic(), pp.Sprint(&d))
 		}
-		if d.Name == "ignoreme" {
+		if d.Dev.Name == "ignoreme" {
 			q.l.Infof("ignoring %s", m.Topic())
 			return
 		}
-
+		// https://www.home-assistant.io/integrations/sensor/#device-class
 		if d.StateTopic != "" {
 			sensorNotFound := false
 			q.Lock()
@@ -159,6 +159,18 @@ func (q *Queue) addSubscriptions() {
 				q.sensorMap[d.StateTopic] = NewVoltageSensor(q.l.Named(m.Topic()), d, q.sendQueue)
 			case DeviceClassCurrent:
 				q.sensorMap[d.StateTopic] = NewCurrentSensor(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassCO2:
+				q.sensorMap[d.StateTopic] = NewCO2Sensor(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassParticulate1:
+				q.sensorMap[d.StateTopic] = NewParticulateSensor1(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassParticulate25:
+				q.sensorMap[d.StateTopic] = NewParticulateSensor25(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassParticulate4:
+				q.sensorMap[d.StateTopic] = NewParticulateSensor4(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassParticulate10:
+				q.sensorMap[d.StateTopic] = NewParticulateSensor10(q.l.Named(m.Topic()), d, q.sendQueue)
+			case DeviceClassParticulateSize:
+				q.sensorMap[d.StateTopic] = NewParticulateSensorCount10(q.l.Named(m.Topic()), d, q.sendQueue)
 			case "": // ignore unrelated messages
 				sensorNotFound = true
 			default:
@@ -176,7 +188,7 @@ func (q *Queue) addSubscriptions() {
 		if strings.HasPrefix(m.Topic(), "homeassistant/") {
 			return
 		}
-		if strings.Contains(m.Topic(), "/ignoreme/") {
+		if strings.Contains(m.Topic(), "ignoreme/") {
 			return
 		}
 		q.RLock() // optimize that lock out
